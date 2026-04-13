@@ -168,6 +168,11 @@ enum DockingState
 DockingState dockingState = DockingState.None;
 int undockRecompileTicksRemaining = 0;
 const int undockRecompileTicks = 30;
+// Legacy compatibility fields kept so older in-world script copies with stale references still compile.
+int dockMergeReadyTicks = 0;
+int dockConnectRetryTicks = 0;
+int dockConnectRecompileTicksRemaining = 0;
+bool dockConnectRecompileArmed = false;
 
 readonly int echoFrequency = 100; // every 100th game tick
 int runtime = 0;
