@@ -17,6 +17,7 @@
 // pathstop : stops path mode and clears remaining queued records
 // dock : starts auto-dock sequence (requires fresh carrier connector broadcast and proximity to dock pose)
 // undock : disconnects and flies to shared dock pose while staying aligned
+// docksync <on|off> : toggle merge/connector sync behavior for dock/undock
 // SPEEDF <value> : sets forward drilling speed (m/s)
 // SPEEDB <value> : sets backing-out speed (m/s)
 // MINEH <value> : sets miner lane height footprint (m)
@@ -50,6 +51,7 @@ string minerRemoteName = "EMM-A Mi Remote Control";
 string carrierMergerName = "EMM-A Ca Merger";
 string minerMergerName = "EMM-A Mi Merger";
 bool dockUseMergerAssist = true;
+bool dockSyncMode = true;
 string dockBroadcastTag = "EMM_A_DOCK_POSE";
 double dockPoseDistance = 50.0;
 double dockApproachSpeed = 15.0;
@@ -158,11 +160,16 @@ Vector3D connectorOffsetLocal = Vector3D.Zero;
 enum DockingState
 {
     None,
+    UndockingRecompile,
     UndockingToPose,
     DockingToPose,
     DockingFinalApproach
 }
 DockingState dockingState = DockingState.None;
+int undockRecompileTicksRemaining = 0;
+const int undockRecompileTicks = 30;
+int dockMergeReadyTicks = 0;
+int dockConnectRetryTicks = 0;
 
 readonly int echoFrequency = 100; // every 100th game tick
 int runtime = 0;
@@ -280,6 +287,7 @@ void WriteEcho()
     if (pathMode)
         sb.AppendLine($"Path: {Math.Min(pathIndex + 1, pathRecords.Count)}/{pathRecords.Count}" + (pathPaused ? " (paused)" : ""));
     sb.AppendLine($"Docking: {dockingState}");
+    sb.AppendLine($"Dock sync mode: {(dockSyncMode ? "ON" : "OFF")}");
     sb.AppendLine($"Carrier pose age: {carrierPoseAgeSeconds:0.0}s");
     sb.AppendLine("Faceforward = look toward target");
     sb.AppendLine("Faceup = align up to gravity-up (or current up in space)");
@@ -606,6 +614,9 @@ void RemoteCommand (string command)
         case "undock":
             StartUndock();
             break;
+        case "docksync":
+            Echo($"Dock sync mode is currently {(dockSyncMode ? "ON" : "OFF")}.");
+            break;
         case "toffreset":
             TOFFR = 0;
             TOFFU = 0;
@@ -617,8 +628,34 @@ void RemoteCommand (string command)
                 StartSingleLaneMining(trimmed);
             else if (trimmed.StartsWith("minearea;", StringComparison.OrdinalIgnoreCase))
                 StartAreaMining(trimmed);
+            else if (trimmed.StartsWith("docksync;", StringComparison.OrdinalIgnoreCase))
+                SetDockSyncMode(trimmed);
             break;
     }
+}
+
+void SetDockSyncMode(string command)
+{
+    string[] parts = command.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+    if (parts.Length < 2)
+    {
+        Echo("Usage: docksync;<on|off>");
+        return;
+    }
+
+    string mode = parts[1].Trim();
+    if (mode.Equals("on", StringComparison.OrdinalIgnoreCase))
+    {
+        dockSyncMode = true;
+        Echo("Dock sync mode set to ON.");
+    }
+    else if (mode.Equals("off", StringComparison.OrdinalIgnoreCase))
+    {
+        dockSyncMode = false;
+        Echo("Dock sync mode set to OFF.");
+    }
+    else
+        Echo("Usage: docksync;<on|off>");
 }
 
 void StartPathRecording(string command)
@@ -1040,16 +1077,27 @@ bool IsConnectorCloseEnoughToConnect()
 
 bool IsMergerDocked()
 {
-    return dockUseMergerAssist &&
-           minerMerger != null &&
-           carrierMerger != null &&
-           minerMerger.IsConnected;
+    return minerMerger != null && minerMerger.IsConnected;
 }
 
 void SetMergerEnabled(bool enabled)
 {
     if (minerMerger != null)
         minerMerger.Enabled = enabled && dockUseMergerAssist;
+}
+
+void SetConnectorEnabled(bool enabled)
+{
+    if (minerConnector != null)
+        minerConnector.Enabled = enabled;
+}
+
+void RecompileFlightSystems()
+{
+    allGyros = GetBlocks<IMyGyro>();
+    allThrusters = GetBlocks<IMyThrust>();
+    thrust = new ThrusterControl(rc, tickSpeed, allThrusters);
+    gyros = new GyroControl(rc, tickSpeed, allGyros);
 }
 
 void StartUndock()
@@ -1067,14 +1115,28 @@ void StartUndock()
 
     UpdateConnectorOffsetLocal();
     minerConnector.Disconnect();
-    SetMergerEnabled(false);
-    ApplyUndockedPowerState();
-    SetDockingDesiredRcAxes();
-    targetPosition = GetDockPosePosition();
-    hasTarget = true;
-    autopilotEnabled = true;
-    activeMaxSpeed = dockApproachSpeed;
-    dockingState = DockingState.UndockingToPose;
+    if (dockSyncMode)
+    {
+        SetMergerEnabled(false);
+        SetConnectorEnabled(false);
+        undockRecompileTicksRemaining = undockRecompileTicks;
+        dockMergeReadyTicks = 0;
+        dockConnectRetryTicks = 0;
+        dockingState = DockingState.UndockingRecompile;
+    }
+    else
+    {
+        SetMergerEnabled(false);
+        ApplyUndockedPowerState();
+        SetDockingDesiredRcAxes();
+        targetPosition = GetDockPosePosition();
+        hasTarget = true;
+        autopilotEnabled = true;
+        activeMaxSpeed = dockApproachSpeed;
+        dockMergeReadyTicks = 0;
+        dockConnectRetryTicks = 0;
+        dockingState = DockingState.UndockingToPose;
+    }
     miningEnabled = false;
     Echo("Undock started.");
 }
@@ -1108,6 +1170,8 @@ void StartDock()
     autopilotEnabled = true;
     activeMaxSpeed = dockApproachSpeed;
     dockingState = DockingState.DockingToPose;
+    dockMergeReadyTicks = 0;
+    dockConnectRetryTicks = 0;
     miningEnabled = false;
     Echo("Dock started (phase 1: dock pose).");
 }
@@ -1122,6 +1186,28 @@ void UpdateDockingState()
     }
 
     SetDockingDesiredRcAxes();
+    if (dockingState == DockingState.UndockingRecompile)
+    {
+        autopilotEnabled = false;
+        hasTarget = false;
+        activeMaxSpeed = 0;
+        if (undockRecompileTicksRemaining > 0)
+        {
+            undockRecompileTicksRemaining--;
+            return;
+        }
+
+        RecompileFlightSystems();
+        ApplyUndockedPowerState();
+        targetPosition = GetDockPosePosition();
+        hasTarget = true;
+        autopilotEnabled = true;
+        activeMaxSpeed = dockApproachSpeed;
+        dockingState = DockingState.UndockingToPose;
+        Echo("Undock recompile complete. Moving to dock pose.");
+        return;
+    }
+
     if (dockingState == DockingState.UndockingToPose)
     {
         if (!IsOrientationAligned(desiredForward, desiredUp, orientationToleranceDeg))
@@ -1135,7 +1221,14 @@ void UpdateDockingState()
         activeMaxSpeed = dockApproachSpeed;
         autopilotEnabled = true;
         if (IsAtDockPose())
+        {
+            if (dockSyncMode)
+            {
+                SetConnectorEnabled(true);
+                SetMergerEnabled(true);
+            }
             CompleteDocking("Undock complete (at dock pose).");
+        }
         return;
     }
 
@@ -1154,6 +1247,8 @@ void UpdateDockingState()
         if (IsAtDockPose())
         {
             dockingState = DockingState.DockingFinalApproach;
+            dockMergeReadyTicks = 0;
+            dockConnectRetryTicks = 0;
             Echo("Dock phase 2: final approach.");
         }
         return;
@@ -1164,9 +1259,24 @@ void UpdateDockingState()
         targetPosition = GetCarrierConnectorPosition();
         activeMaxSpeed = dockFinalSpeed;
         autopilotEnabled = true;
-        bool readyToConnect = IsConnectorAlignmentReady(dockConnectAlignToleranceDeg) && IsConnectorCloseEnoughToConnect();
-        if (readyToConnect && minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connectable)
-            minerConnector.Connect();
+        bool mergedNow = IsMergerDocked();
+        if (mergedNow)
+            dockMergeReadyTicks++;
+        else
+            dockMergeReadyTicks = 0;
+        bool mergeReady = !dockSyncMode || dockMergeReadyTicks >= 2; // wait one extra tick after first merge detection
+        if (mergeReady)
+        {
+            dockConnectRetryTicks++;
+            if (dockConnectRetryTicks >= 10)
+            {
+                dockConnectRetryTicks = 0;
+                if (minerConnector != null && minerConnector.Status != MyShipConnectorStatus.Connected)
+                    minerConnector.Connect();
+            }
+        }
+        else
+            dockConnectRetryTicks = 0;
 
         bool connectorDocked = minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connected;
         if (connectorDocked || IsMergerDocked())
@@ -1204,6 +1314,9 @@ void ApplyUndockedPowerState()
 void CompleteDocking(string message)
 {
     dockingState = DockingState.None;
+    undockRecompileTicksRemaining = 0;
+    dockMergeReadyTicks = 0;
+    dockConnectRetryTicks = 0;
     autopilotEnabled = false;
     hasTarget = false;
     activeMaxSpeed = 0;
@@ -1929,6 +2042,10 @@ void SaveState()
     sb.AppendLine("pathRecordMineDepth=" + pathRecordMineDepth.ToString("R"));
     sb.AppendLine("cockpitGyroForcedOff=" + (cockpitGyroControlForcedOff ? "1" : "0"));
     sb.AppendLine("dockingState=" + (int)dockingState);
+    sb.AppendLine("dockSyncMode=" + (dockSyncMode ? "1" : "0"));
+    sb.AppendLine("undockRecompileTicksRemaining=" + undockRecompileTicksRemaining);
+    sb.AppendLine("dockMergeReadyTicks=" + dockMergeReadyTicks);
+    sb.AppendLine("dockConnectRetryTicks=" + dockConnectRetryTicks);
     sb.AppendLine("connectorOffsetLocal=" + V3ToString(connectorOffsetLocal));
     Storage = sb.ToString();
 }
@@ -2012,6 +2129,10 @@ void LoadState()
     if (dict.TryGetValue("pathRecordMineDepth", out s) && double.TryParse(s, out d)) pathRecordMineDepth = d;
     if (dict.TryGetValue("cockpitGyroForcedOff", out s)) cockpitGyroControlForcedOff = s == "1";
     if (dict.TryGetValue("dockingState", out s) && int.TryParse(s, out n)) dockingState = (DockingState)n;
+    if (dict.TryGetValue("dockSyncMode", out s)) dockSyncMode = s == "1";
+    if (dict.TryGetValue("undockRecompileTicksRemaining", out s) && int.TryParse(s, out n)) undockRecompileTicksRemaining = n;
+    if (dict.TryGetValue("dockMergeReadyTicks", out s) && int.TryParse(s, out n)) dockMergeReadyTicks = n;
+    if (dict.TryGetValue("dockConnectRetryTicks", out s) && int.TryParse(s, out n)) dockConnectRetryTicks = n;
     if (dict.TryGetValue("connectorOffsetLocal", out s) && TryParseV3(s, out v)) connectorOffsetLocal = v;
 
     // If drills were actively running when the reload happened, turn them back on
