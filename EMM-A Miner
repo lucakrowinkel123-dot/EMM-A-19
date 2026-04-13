@@ -170,6 +170,9 @@ int undockRecompileTicksRemaining = 0;
 const int undockRecompileTicks = 30;
 int dockMergeReadyTicks = 0;
 int dockConnectRetryTicks = 0;
+int dockConnectRecompileTicksRemaining = 0;
+bool dockConnectRecompileArmed = false;
+const int dockConnectRecompileTicks = 30;
 
 readonly int echoFrequency = 100; // every 100th game tick
 int runtime = 0;
@@ -1131,6 +1134,8 @@ void StartUndock()
         undockRecompileTicksRemaining = undockRecompileTicks;
         dockMergeReadyTicks = 0;
         dockConnectRetryTicks = 0;
+        dockConnectRecompileTicksRemaining = 0;
+        dockConnectRecompileArmed = false;
         dockingState = DockingState.UndockingRecompile;
     }
     else
@@ -1144,6 +1149,8 @@ void StartUndock()
         activeMaxSpeed = dockApproachSpeed;
         dockMergeReadyTicks = 0;
         dockConnectRetryTicks = 0;
+        dockConnectRecompileTicksRemaining = 0;
+        dockConnectRecompileArmed = false;
         dockingState = DockingState.UndockingToPose;
     }
     miningEnabled = false;
@@ -1182,6 +1189,8 @@ void StartDock()
     dockingState = DockingState.DockingToPose;
     dockMergeReadyTicks = 0;
     dockConnectRetryTicks = 0;
+    dockConnectRecompileTicksRemaining = 0;
+    dockConnectRecompileArmed = false;
     miningEnabled = false;
     Echo("Dock started (phase 1: dock pose).");
 }
@@ -1259,6 +1268,8 @@ void UpdateDockingState()
             dockingState = DockingState.DockingFinalApproach;
             dockMergeReadyTicks = 0;
             dockConnectRetryTicks = 0;
+            dockConnectRecompileTicksRemaining = 0;
+            dockConnectRecompileArmed = false;
             Echo("Dock phase 2: final approach.");
         }
         return;
@@ -1275,7 +1286,36 @@ void UpdateDockingState()
         else
             dockMergeReadyTicks = 0;
         bool mergeReady = !dockSyncMode || dockMergeReadyTicks >= 2; // wait one extra tick after first merge detection
+        bool canAttemptConnect = mergeReady;
         if (mergeReady)
+        {
+            if (!dockConnectRecompileArmed)
+            {
+                dockConnectRecompileArmed = true;
+                dockConnectRecompileTicksRemaining = dockConnectRecompileTicks;
+                dockConnectRetryTicks = 0;
+            }
+
+            if (dockConnectRecompileTicksRemaining > 0)
+            {
+                dockConnectRecompileTicksRemaining--;
+                canAttemptConnect = false;
+            }
+            else if (dockConnectRecompileTicksRemaining == 0)
+            {
+                RefreshDockHardware(); // simulate post-merge recompile/rescan before connector retries
+                dockConnectRecompileTicksRemaining = -1;
+            }
+        }
+        else
+        {
+            dockConnectRetryTicks = 0;
+            dockConnectRecompileTicksRemaining = 0;
+            dockConnectRecompileArmed = false;
+            canAttemptConnect = false;
+        }
+
+        if (canAttemptConnect)
         {
             dockConnectRetryTicks++;
             if (dockConnectRetryTicks >= 10)
@@ -1285,8 +1325,6 @@ void UpdateDockingState()
                     minerConnector.Connect();
             }
         }
-        else
-            dockConnectRetryTicks = 0;
 
         bool connectorDocked = minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connected;
         if (connectorDocked || IsMergerDocked())
@@ -1327,6 +1365,8 @@ void CompleteDocking(string message)
     undockRecompileTicksRemaining = 0;
     dockMergeReadyTicks = 0;
     dockConnectRetryTicks = 0;
+    dockConnectRecompileTicksRemaining = 0;
+    dockConnectRecompileArmed = false;
     autopilotEnabled = false;
     hasTarget = false;
     activeMaxSpeed = 0;
@@ -2056,6 +2096,8 @@ void SaveState()
     sb.AppendLine("undockRecompileTicksRemaining=" + undockRecompileTicksRemaining);
     sb.AppendLine("dockMergeReadyTicks=" + dockMergeReadyTicks);
     sb.AppendLine("dockConnectRetryTicks=" + dockConnectRetryTicks);
+    sb.AppendLine("dockConnectRecompileTicksRemaining=" + dockConnectRecompileTicksRemaining);
+    sb.AppendLine("dockConnectRecompileArmed=" + (dockConnectRecompileArmed ? "1" : "0"));
     sb.AppendLine("connectorOffsetLocal=" + V3ToString(connectorOffsetLocal));
     Storage = sb.ToString();
 }
@@ -2143,6 +2185,8 @@ void LoadState()
     if (dict.TryGetValue("undockRecompileTicksRemaining", out s) && int.TryParse(s, out n)) undockRecompileTicksRemaining = n;
     if (dict.TryGetValue("dockMergeReadyTicks", out s) && int.TryParse(s, out n)) dockMergeReadyTicks = n;
     if (dict.TryGetValue("dockConnectRetryTicks", out s) && int.TryParse(s, out n)) dockConnectRetryTicks = n;
+    if (dict.TryGetValue("dockConnectRecompileTicksRemaining", out s) && int.TryParse(s, out n)) dockConnectRecompileTicksRemaining = n;
+    if (dict.TryGetValue("dockConnectRecompileArmed", out s)) dockConnectRecompileArmed = s == "1";
     if (dict.TryGetValue("connectorOffsetLocal", out s) && TryParseV3(s, out v)) connectorOffsetLocal = v;
 
     // If drills were actively running when the reload happened, turn them back on
