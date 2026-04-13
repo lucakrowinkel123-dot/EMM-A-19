@@ -1327,7 +1327,8 @@ void UpdateDockingState()
         }
 
         bool connectorDocked = minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connected;
-        if (connectorDocked || IsMergerDocked())
+        bool dockingComplete = dockSyncMode ? connectorDocked : (connectorDocked || IsMergerDocked());
+        if (dockingComplete)
         {
             ApplyDockedPowerState();
             CompleteDocking("Dock complete (connected).");
