@@ -1260,7 +1260,8 @@ void UpdateDockingState()
         else
             dockMergeReadyTicks = 0;
         bool mergeReady = !dockSyncMode || dockMergeReadyTicks >= 2; // wait one extra tick after first merge detection
-        bool readyToConnect = mergeReady && IsConnectorAlignmentReady(dockConnectAlignToleranceDeg) && IsConnectorCloseEnoughToConnect();
+        bool connectorConnectable = minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connectable;
+        bool readyToConnect = mergeReady && (connectorConnectable || (IsConnectorAlignmentReady(dockConnectAlignToleranceDeg) && IsConnectorCloseEnoughToConnect()));
         if (readyToConnect && minerConnector != null && minerConnector.Status != MyShipConnectorStatus.Connected)
             minerConnector.Connect();
 
