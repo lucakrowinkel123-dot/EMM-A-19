@@ -1251,7 +1251,7 @@ void UpdateDockingState()
         autopilotEnabled = true;
         bool mergeReady = !dockSyncMode || IsMergerDocked();
         bool readyToConnect = mergeReady && IsConnectorAlignmentReady(dockConnectAlignToleranceDeg) && IsConnectorCloseEnoughToConnect();
-        if (readyToConnect && minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connectable)
+        if (readyToConnect && minerConnector != null && minerConnector.Status != MyShipConnectorStatus.Connected)
             minerConnector.Connect();
 
         bool connectorDocked = minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connected;
