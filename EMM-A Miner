@@ -1075,10 +1075,7 @@ bool IsConnectorCloseEnoughToConnect()
 
 bool IsMergerDocked()
 {
-    return dockUseMergerAssist &&
-           minerMerger != null &&
-           carrierMerger != null &&
-           minerMerger.IsConnected;
+    return minerMerger != null && minerMerger.IsConnected;
 }
 
 void SetMergerEnabled(bool enabled)
@@ -1252,7 +1249,7 @@ void UpdateDockingState()
         targetPosition = GetCarrierConnectorPosition();
         activeMaxSpeed = dockFinalSpeed;
         autopilotEnabled = true;
-        bool mergeReady = !dockSyncMode || !dockUseMergerAssist || minerMerger == null || carrierMerger == null || IsMergerDocked();
+        bool mergeReady = !dockSyncMode || IsMergerDocked();
         bool readyToConnect = mergeReady && IsConnectorAlignmentReady(dockConnectAlignToleranceDeg) && IsConnectorCloseEnoughToConnect();
         if (readyToConnect && minerConnector != null && minerConnector.Status == MyShipConnectorStatus.Connectable)
             minerConnector.Connect();
